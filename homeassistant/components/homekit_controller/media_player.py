@@ -6,6 +6,8 @@ import logging
 from typing import Any
 
 from aiohomekit.model.characteristics import (
+    Characteristic,
+    CharacteristicPermissions,
     CharacteristicsTypes,
     CurrentMediaStateValues,
     RemoteKeyValues,
@@ -80,10 +82,40 @@ class HomeKitTelevision(HomeKitEntity, MediaPlayerEntity):
             CharacteristicsTypes.TARGET_MEDIA_STATE,
             CharacteristicsTypes.REMOTE_KEY,
             CharacteristicsTypes.ACTIVE_IDENTIFIER,
+            CharacteristicsTypes.MUTE,
+            CharacteristicsTypes.VOLUME,
             # Characterics that are on the linked INPUT_SOURCE services
             CharacteristicsTypes.CONFIGURED_NAME,
             CharacteristicsTypes.IDENTIFIER,
         ]
+
+    def _speaker_service(self) -> Service | None:
+        """Return the linked speaker service for the tv."""
+        this_accessory = self._accessory.entity_map.aid(self._aid)
+        this_tv = this_accessory.services.iid(self._iid)
+        return this_accessory.services.first(
+            service_type=ServicesTypes.SPEAKER, parent_service=this_tv
+        )
+
+    def _speaker_char(self, char_type: str) -> Characteristic | None:
+        """Return a speaker characteristic if available."""
+        if not (speaker := self._speaker_service()):
+            return None
+
+        if not speaker.has(char_type):
+            return None
+
+        return speaker[char_type]
+
+    async def _async_put_speaker_characteristics(
+        self, characteristics: dict[str, int | bool]
+    ) -> None:
+        """Write speaker characteristics to the device."""
+        if not (speaker := self._speaker_service()):
+            return
+
+        payload = speaker.build_update(characteristics)
+        await self._accessory.put_characteristics(payload)
 
     @property
     def supported_features(self) -> MediaPlayerEntityFeature:
@@ -114,6 +146,18 @@ class HomeKitTelevision(HomeKitEntity, MediaPlayerEntity):
 
             if RemoteKeyValues.PREVIOUS_TRACK in self.supported_remote_keys:
                 features |= MediaPlayerEntityFeature.PREVIOUS_TRACK
+
+        if (
+            (volume_char := self._speaker_char(CharacteristicsTypes.VOLUME))
+            and CharacteristicPermissions.paired_write in volume_char.perms
+        ):
+            features |= MediaPlayerEntityFeature.VOLUME_SET
+
+        if (
+            (mute_char := self._speaker_char(CharacteristicsTypes.MUTE))
+            and CharacteristicPermissions.paired_write in mute_char.perms
+        ):
+            features |= MediaPlayerEntityFeature.VOLUME_MUTE
 
         return features
 
@@ -218,6 +262,55 @@ class HomeKitTelevision(HomeKitEntity, MediaPlayerEntity):
             return HK_TO_HA_STATE.get(homekit_state, MediaPlayerState.ON)
 
         return MediaPlayerState.ON
+
+    @property
+    def volume_level(self) -> float | None:
+        """Return the current volume level."""
+        if not (volume_char := self._speaker_char(CharacteristicsTypes.VOLUME)):
+            return None
+
+        if (volume := volume_char.value) is None:
+            return None
+
+        max_value = volume_char.maxValue or 100
+        if max_value == 0:
+            return 0
+        return volume / max_value
+
+    @property
+    def is_volume_muted(self) -> bool | None:
+        """Return the mute status."""
+        if not (mute_char := self._speaker_char(CharacteristicsTypes.MUTE)):
+            return None
+
+        if (mute := mute_char.value) is None:
+            return None
+
+        return bool(mute)
+
+    async def async_set_volume_level(self, volume: float) -> None:
+        """Set volume level, range 0..1."""
+        if not (volume_char := self._speaker_char(CharacteristicsTypes.VOLUME)):
+            return
+
+        min_value = volume_char.minValue or 0
+        max_value = volume_char.maxValue or 100
+        min_step = volume_char.minStep or 1
+        level = round(volume * max_value)
+        level = max(min_value, min(max_value, level))
+        level = round(level / min_step) * min_step
+        await self._async_put_speaker_characteristics(
+            {CharacteristicsTypes.VOLUME: level}
+        )
+
+    async def async_mute_volume(self, mute: bool) -> None:
+        """Mute the media player."""
+        if not self._speaker_char(CharacteristicsTypes.MUTE):
+            return
+
+        await self._async_put_speaker_characteristics(
+            {CharacteristicsTypes.MUTE: mute}
+        )
 
     async def async_turn_on(self) -> None:
         """Turn the tv on."""

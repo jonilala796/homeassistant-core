@@ -14,6 +14,8 @@ from homeassistant.components.media_player import (
     DOMAIN as MEDIA_PLAYER_DOMAIN,
     SERVICE_TURN_OFF,
     SERVICE_TURN_ON,
+    SERVICE_VOLUME_MUTE,
+    SERVICE_VOLUME_SET,
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
@@ -66,6 +68,24 @@ def create_tv_service_with_target_media_state(accessory: Accessory) -> Service:
     tms = service.add_char(CharacteristicsTypes.TARGET_MEDIA_STATE)
     tms.value = None
     tms.perms.append(CharacteristicPermissions.paired_write)
+
+    return service
+
+
+def create_tv_service_with_speaker(accessory: Accessory) -> Service:
+    """Define a TV service with a linked speaker."""
+    service = create_tv_service(accessory)
+
+    speaker = accessory.add_service(ServicesTypes.SPEAKER, name="Speaker")
+    volume = speaker.add_char(CharacteristicsTypes.VOLUME)
+    volume.value = 10
+    volume.perms.append(CharacteristicPermissions.paired_write)
+
+    mute = speaker.add_char(CharacteristicsTypes.MUTE)
+    mute.value = False
+    mute.perms.append(CharacteristicPermissions.paired_write)
+
+    service.add_linked_service(speaker)
 
     return service
 
@@ -522,5 +542,44 @@ async def test_turn_off(hass: HomeAssistant, get_next_aid: Callable[[], int]) ->
         ServicesTypes.TELEVISION,
         {
             CharacteristicsTypes.ACTIVE: 0,
+        },
+    )
+
+
+async def test_speaker_volume_control(
+    hass: HomeAssistant, get_next_aid: Callable[[], int]
+) -> None:
+    """Test that we can read and write volume on a linked speaker."""
+    helper = await setup_test_component(
+        hass, get_next_aid(), create_tv_service_with_speaker
+    )
+
+    state = await helper.poll_and_get_state()
+    assert state.attributes["volume_level"] == 0.1
+    assert state.attributes["is_volume_muted"] is False
+
+    await hass.services.async_call(
+        MEDIA_PLAYER_DOMAIN,
+        SERVICE_VOLUME_SET,
+        {"entity_id": helper.entity_id, "volume_level": 0.5},
+        blocking=True,
+    )
+    helper.async_assert_service_values(
+        ServicesTypes.SPEAKER,
+        {
+            CharacteristicsTypes.VOLUME: 50,
+        },
+    )
+
+    await hass.services.async_call(
+        MEDIA_PLAYER_DOMAIN,
+        SERVICE_VOLUME_MUTE,
+        {"entity_id": helper.entity_id, "is_volume_muted": True},
+        blocking=True,
+    )
+    helper.async_assert_service_values(
+        ServicesTypes.SPEAKER,
+        {
+            CharacteristicsTypes.MUTE: True,
         },
     )
