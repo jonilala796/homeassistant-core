@@ -210,6 +210,63 @@ async def test_pause_remote_key(
     )
 
 
+async def test_next_previous_remote_keys(
+    hass: HomeAssistant, get_next_aid: Callable[[], int]
+) -> None:
+    """Test that we can send next/previous remote key commands."""
+    helper = await setup_test_component(hass, get_next_aid(), create_tv_service)
+
+    await hass.services.async_call(
+        "media_player",
+        "media_next_track",
+        {"entity_id": "media_player.testdevice"},
+        blocking=True,
+    )
+    helper.async_assert_service_values(
+        ServicesTypes.TELEVISION,
+        {
+            CharacteristicsTypes.REMOTE_KEY: 2,
+        },
+    )
+
+    await hass.services.async_call(
+        "media_player",
+        "media_previous_track",
+        {"entity_id": "media_player.testdevice"},
+        blocking=True,
+    )
+    helper.async_assert_service_values(
+        ServicesTypes.TELEVISION,
+        {
+            CharacteristicsTypes.REMOTE_KEY: 3,
+        },
+    )
+
+
+async def test_play_media_remote_key(
+    hass: HomeAssistant, get_next_aid: Callable[[], int]
+) -> None:
+    """Test that we can send a remote key via play media."""
+    helper = await setup_test_component(hass, get_next_aid(), create_tv_service)
+
+    await hass.services.async_call(
+        "media_player",
+        "play_media",
+        {
+            "entity_id": "media_player.testdevice",
+            "media_content_type": "remote_key",
+            "media_content_id": "back",
+        },
+        blocking=True,
+    )
+    helper.async_assert_service_values(
+        ServicesTypes.TELEVISION,
+        {
+            CharacteristicsTypes.REMOTE_KEY: 9,
+        },
+    )
+
+
 async def test_play(hass: HomeAssistant, get_next_aid: Callable[[], int]) -> None:
     """Test that we can play media on a media player."""
     helper = await setup_test_component(

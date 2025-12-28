@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from aiohomekit.model.characteristics import (
     CharacteristicsTypes,
@@ -18,10 +19,12 @@ from homeassistant.components.media_player import (
     MediaPlayerEntity,
     MediaPlayerEntityFeature,
     MediaPlayerState,
+    MediaType,
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import KNOWN_DEVICES
@@ -30,6 +33,8 @@ from .entity import HomeKitEntity
 
 _LOGGER = logging.getLogger(__name__)
 
+
+REMOTE_KEY_MEDIA_TYPE = "remote_key"
 
 HK_TO_HA_STATE = {
     CurrentMediaStateValues.PLAYING: MediaPlayerState.PLAYING,
@@ -98,11 +103,17 @@ class HomeKitTelevision(HomeKitEntity, MediaPlayerEntity):
             if TargetMediaStateValues.STOP in self.supported_media_states:
                 features |= MediaPlayerEntityFeature.STOP
 
-        if (
-            self.service.has(CharacteristicsTypes.REMOTE_KEY)
-            and RemoteKeyValues.PLAY_PAUSE in self.supported_remote_keys
-        ):
-            features |= MediaPlayerEntityFeature.PAUSE | MediaPlayerEntityFeature.PLAY
+        if self.service.has(CharacteristicsTypes.REMOTE_KEY):
+            features |= MediaPlayerEntityFeature.PLAY_MEDIA
+
+            if RemoteKeyValues.PLAY_PAUSE in self.supported_remote_keys:
+                features |= MediaPlayerEntityFeature.PAUSE | MediaPlayerEntityFeature.PLAY
+
+            if RemoteKeyValues.NEXT_TRACK in self.supported_remote_keys:
+                features |= MediaPlayerEntityFeature.NEXT_TRACK
+
+            if RemoteKeyValues.PREVIOUS_TRACK in self.supported_remote_keys:
+                features |= MediaPlayerEntityFeature.PREVIOUS_TRACK
 
         return features
 
@@ -123,8 +134,39 @@ class HomeKitTelevision(HomeKitEntity, MediaPlayerEntity):
         if not self.service.has(CharacteristicsTypes.REMOTE_KEY):
             return set()
 
-        return clamp_enum_to_char(
-            RemoteKeyValues, self.service[CharacteristicsTypes.REMOTE_KEY]
+        char = self.service[CharacteristicsTypes.REMOTE_KEY]
+        if valid_values := getattr(char, "valid_values", None):
+            return set(valid_values)
+
+        return clamp_enum_to_char(RemoteKeyValues, char)
+
+    def _normalize_remote_key_name(self, media_id: str) -> str:
+        """Normalize a remote key name for matching."""
+        return media_id.strip().upper().replace("-", "_").replace(" ", "_")
+
+    def _remote_key_from_media_id(self, media_id: str) -> RemoteKeyValues | None:
+        """Return the remote key for a media id."""
+        normalized = self._normalize_remote_key_name(media_id)
+        if normalized in RemoteKeyValues.__members__:
+            return RemoteKeyValues[normalized]
+
+        try:
+            value = int(media_id)
+        except ValueError:
+            return None
+        try:
+            return RemoteKeyValues(value)
+        except ValueError:
+            return None
+
+    async def _async_send_remote_key(self, remote_key: RemoteKeyValues) -> None:
+        """Send a remote key to the TV if supported."""
+        if remote_key.value not in self.supported_remote_keys:
+            _LOGGER.debug("Remote key %s is not supported", remote_key)
+            return
+
+        await self.async_put_characteristics(
+            {CharacteristicsTypes.REMOTE_KEY: remote_key.value}
         )
 
     @property
@@ -225,6 +267,34 @@ class HomeKitTelevision(HomeKitEntity, MediaPlayerEntity):
             await self.async_put_characteristics(
                 {CharacteristicsTypes.TARGET_MEDIA_STATE: TargetMediaStateValues.STOP}
             )
+
+    async def async_media_next_track(self) -> None:
+        """Send next track command."""
+        await self._async_send_remote_key(RemoteKeyValues.NEXT_TRACK)
+
+    async def async_media_previous_track(self) -> None:
+        """Send previous track command."""
+        await self._async_send_remote_key(RemoteKeyValues.PREVIOUS_TRACK)
+
+    async def async_play_media(
+        self, media_type: MediaType | str, media_id: str, **kwargs: Any
+    ) -> None:
+        """Play a piece of media."""
+        media_type_value = (
+            media_type.value if isinstance(media_type, MediaType) else str(media_type)
+        )
+        if media_type_value != REMOTE_KEY_MEDIA_TYPE:
+            raise ServiceValidationError(
+                f"Unsupported media type {media_type}. Supported type: {REMOTE_KEY_MEDIA_TYPE}"
+            )
+
+        if (remote_key := self._remote_key_from_media_id(media_id)) is None:
+            raise ServiceValidationError(
+                f"Unsupported remote key {media_id}. Supported keys: "
+                f"{', '.join(key.lower() for key in RemoteKeyValues.__members__)}"
+            )
+
+        await self._async_send_remote_key(remote_key)
 
     async def async_select_source(self, source: str) -> None:
         """Switch to a different media source."""
