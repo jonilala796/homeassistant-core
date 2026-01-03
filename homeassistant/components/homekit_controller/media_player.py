@@ -245,11 +245,10 @@ class HomeKitTelevision(HomeKitEntity, MediaPlayerEntity):
         this_accessory = self._accessory.entity_map.aid(self._aid)
         this_tv = this_accessory.services.iid(self._iid)
 
-        speaker_service = this_accessory.services.first(
+        return this_accessory.services.first(
             service_type=ServicesTypes.SPEAKER,
             parent_service=this_tv,
         )
-        return speaker_service
 
     @property
     def volume_level(self) -> float | None:
@@ -257,7 +256,7 @@ class HomeKitTelevision(HomeKitEntity, MediaPlayerEntity):
         speaker_service = self._get_speaker_service()
         if not speaker_service or not speaker_service.has(CharacteristicsTypes.VOLUME):
             return None
-        
+
         # HomeKit volume is 0-100, Home Assistant uses 0.0-1.0
         volume = speaker_service.value(CharacteristicsTypes.VOLUME)
         if volume is not None:
@@ -270,7 +269,7 @@ class HomeKitTelevision(HomeKitEntity, MediaPlayerEntity):
         speaker_service = self._get_speaker_service()
         if not speaker_service or not speaker_service.has(CharacteristicsTypes.MUTE):
             return None
-        
+
         return speaker_service.value(CharacteristicsTypes.MUTE)
 
     async def async_set_volume_level(self, volume: float) -> None:
@@ -278,10 +277,10 @@ class HomeKitTelevision(HomeKitEntity, MediaPlayerEntity):
         speaker_service = self._get_speaker_service()
         if not speaker_service or not speaker_service.has(CharacteristicsTypes.VOLUME):
             return
-        
+
         # Convert Home Assistant volume (0.0-1.0) to HomeKit volume (0-100)
         homekit_volume = int(volume * 100)
-        
+
         # Build the characteristics update for the speaker service
         chars_to_update = {CharacteristicsTypes.VOLUME: homekit_volume}
         payload = speaker_service.build_update(chars_to_update)
@@ -294,7 +293,7 @@ class HomeKitTelevision(HomeKitEntity, MediaPlayerEntity):
             CharacteristicsTypes.VOLUME_SELECTOR
         ):
             return
-        
+
         # Volume selector: 0 = increment, 1 = decrement
         chars_to_update = {CharacteristicsTypes.VOLUME_SELECTOR: 0}
         payload = speaker_service.build_update(chars_to_update)
@@ -307,7 +306,7 @@ class HomeKitTelevision(HomeKitEntity, MediaPlayerEntity):
             CharacteristicsTypes.VOLUME_SELECTOR
         ):
             return
-        
+
         # Volume selector: 0 = increment, 1 = decrement
         chars_to_update = {CharacteristicsTypes.VOLUME_SELECTOR: 1}
         payload = speaker_service.build_update(chars_to_update)
@@ -318,7 +317,7 @@ class HomeKitTelevision(HomeKitEntity, MediaPlayerEntity):
         speaker_service = self._get_speaker_service()
         if not speaker_service or not speaker_service.has(CharacteristicsTypes.MUTE):
             return
-        
+
         chars_to_update = {CharacteristicsTypes.MUTE: mute}
         payload = speaker_service.build_update(chars_to_update)
         await self._accessory.put_characteristics(payload)

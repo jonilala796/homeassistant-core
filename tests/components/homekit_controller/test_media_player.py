@@ -70,6 +70,34 @@ def create_tv_service_with_target_media_state(accessory: Accessory) -> Service:
     return service
 
 
+def create_tv_service_with_speaker(accessory: Accessory) -> Service:
+    """Define a TV service with a speaker for volume control."""
+    tv_service = create_tv_service(accessory)
+
+    # Add a speaker service linked to the TV
+    speaker_service = accessory.add_service(ServicesTypes.SPEAKER)
+    tv_service.add_linked_service(speaker_service)
+
+    # Add volume characteristics to the speaker
+    volume = speaker_service.add_char(CharacteristicsTypes.VOLUME)
+    volume.value = 50
+    volume.perms.append(CharacteristicPermissions.paired_read)
+    volume.perms.append(CharacteristicPermissions.paired_write)
+    volume.perms.append(CharacteristicPermissions.events)
+
+    volume_selector = speaker_service.add_char(CharacteristicsTypes.VOLUME_SELECTOR)
+    volume_selector.value = None
+    volume_selector.perms.append(CharacteristicPermissions.paired_write)
+
+    mute = speaker_service.add_char(CharacteristicsTypes.MUTE)
+    mute.value = False
+    mute.perms.append(CharacteristicPermissions.paired_read)
+    mute.perms.append(CharacteristicPermissions.paired_write)
+    mute.perms.append(CharacteristicPermissions.events)
+
+    return tv_service
+
+
 async def test_tv_read_state(
     hass: HomeAssistant, get_next_aid: Callable[[], int]
 ) -> None:
@@ -467,3 +495,147 @@ async def test_turn_off(hass: HomeAssistant, get_next_aid: Callable[[], int]) ->
             CharacteristicsTypes.ACTIVE: 0,
         },
     )
+
+
+async def test_volume_read(
+    hass: HomeAssistant, get_next_aid: Callable[[], int]
+) -> None:
+    """Test that we can read volume from a HomeKit TV with speaker."""
+    helper = await setup_test_component(
+        hass, get_next_aid(), create_tv_service_with_speaker
+    )
+
+    state = await helper.poll_and_get_state()
+    assert state.attributes["volume_level"] == 0.5
+    assert state.attributes["is_volume_muted"] is False
+
+    # Update volume and mute
+    state = await helper.async_update(
+        ServicesTypes.SPEAKER,
+        {
+            CharacteristicsTypes.VOLUME: 75,
+            CharacteristicsTypes.MUTE: True,
+        },
+    )
+    assert state.attributes["volume_level"] == 0.75
+    assert state.attributes["is_volume_muted"] is True
+
+
+async def test_set_volume(hass: HomeAssistant, get_next_aid: Callable[[], int]) -> None:
+    """Test that we can set volume on a HomeKit TV."""
+    helper = await setup_test_component(
+        hass, get_next_aid(), create_tv_service_with_speaker
+    )
+
+    await hass.services.async_call(
+        MEDIA_PLAYER_DOMAIN,
+        "volume_set",
+        {"entity_id": "media_player.testdevice", "volume_level": 0.8},
+        blocking=True,
+    )
+    helper.async_assert_service_values(
+        ServicesTypes.SPEAKER,
+        {
+            CharacteristicsTypes.VOLUME: 80,
+        },
+    )
+
+
+async def test_volume_up(hass: HomeAssistant, get_next_aid: Callable[[], int]) -> None:
+    """Test that we can send volume up command to a HomeKit TV."""
+    helper = await setup_test_component(
+        hass, get_next_aid(), create_tv_service_with_speaker
+    )
+
+    await hass.services.async_call(
+        MEDIA_PLAYER_DOMAIN,
+        "volume_up",
+        {"entity_id": "media_player.testdevice"},
+        blocking=True,
+    )
+    helper.async_assert_service_values(
+        ServicesTypes.SPEAKER,
+        {
+            CharacteristicsTypes.VOLUME_SELECTOR: 0,
+        },
+    )
+
+
+async def test_volume_down(
+    hass: HomeAssistant, get_next_aid: Callable[[], int]
+) -> None:
+    """Test that we can send volume down command to a HomeKit TV."""
+    helper = await setup_test_component(
+        hass, get_next_aid(), create_tv_service_with_speaker
+    )
+
+    await hass.services.async_call(
+        MEDIA_PLAYER_DOMAIN,
+        "volume_down",
+        {"entity_id": "media_player.testdevice"},
+        blocking=True,
+    )
+    helper.async_assert_service_values(
+        ServicesTypes.SPEAKER,
+        {
+            CharacteristicsTypes.VOLUME_SELECTOR: 1,
+        },
+    )
+
+
+async def test_mute_volume(
+    hass: HomeAssistant, get_next_aid: Callable[[], int]
+) -> None:
+    """Test that we can mute/unmute a HomeKit TV."""
+    helper = await setup_test_component(
+        hass, get_next_aid(), create_tv_service_with_speaker
+    )
+
+    # Mute
+    await hass.services.async_call(
+        MEDIA_PLAYER_DOMAIN,
+        "volume_mute",
+        {"entity_id": "media_player.testdevice", "is_volume_muted": True},
+        blocking=True,
+    )
+    helper.async_assert_service_values(
+        ServicesTypes.SPEAKER,
+        {
+            CharacteristicsTypes.MUTE: True,
+        },
+    )
+
+    # Unmute
+    await hass.services.async_call(
+        MEDIA_PLAYER_DOMAIN,
+        "volume_mute",
+        {"entity_id": "media_player.testdevice", "is_volume_muted": False},
+        blocking=True,
+    )
+    helper.async_assert_service_values(
+        ServicesTypes.SPEAKER,
+        {
+            CharacteristicsTypes.MUTE: False,
+        },
+    )
+
+
+async def test_tv_without_speaker(
+    hass: HomeAssistant, get_next_aid: Callable[[], int]
+) -> None:
+    """Test that volume controls gracefully handle TVs without speaker service."""
+    helper = await setup_test_component(hass, get_next_aid(), create_tv_service)
+
+    state = await helper.poll_and_get_state()
+    # Volume controls should not be available
+    assert "volume_level" not in state.attributes
+    assert "is_volume_muted" not in state.attributes
+
+    # Volume commands should be no-ops (not fail)
+    await hass.services.async_call(
+        MEDIA_PLAYER_DOMAIN,
+        "volume_set",
+        {"entity_id": "media_player.testdevice", "volume_level": 0.5},
+        blocking=True,
+    )
+    # Should not raise an error
