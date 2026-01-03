@@ -78,6 +78,10 @@ class HomeKitTelevision(HomeKitEntity, MediaPlayerEntity):
             # Characterics that are on the linked INPUT_SOURCE services
             CharacteristicsTypes.CONFIGURED_NAME,
             CharacteristicsTypes.IDENTIFIER,
+            # Volume control characteristics (may be on linked SPEAKER service)
+            CharacteristicsTypes.VOLUME,
+            CharacteristicsTypes.VOLUME_SELECTOR,
+            CharacteristicsTypes.MUTE,
         ]
 
     @property
@@ -103,6 +107,16 @@ class HomeKitTelevision(HomeKitEntity, MediaPlayerEntity):
             and RemoteKeyValues.PLAY_PAUSE in self.supported_remote_keys
         ):
             features |= MediaPlayerEntityFeature.PAUSE | MediaPlayerEntityFeature.PLAY
+
+        # Check for volume control on speaker service
+        speaker_service = self._get_speaker_service()
+        if speaker_service:
+            if speaker_service.has(CharacteristicsTypes.VOLUME):
+                features |= MediaPlayerEntityFeature.VOLUME_SET
+            if speaker_service.has(CharacteristicsTypes.VOLUME_SELECTOR):
+                features |= MediaPlayerEntityFeature.VOLUME_STEP
+            if speaker_service.has(CharacteristicsTypes.MUTE):
+                features |= MediaPlayerEntityFeature.VOLUME_MUTE
 
         return features
 
@@ -225,6 +239,89 @@ class HomeKitTelevision(HomeKitEntity, MediaPlayerEntity):
             await self.async_put_characteristics(
                 {CharacteristicsTypes.TARGET_MEDIA_STATE: TargetMediaStateValues.STOP}
             )
+
+    def _get_speaker_service(self) -> Service | None:
+        """Get the speaker service linked to this TV."""
+        this_accessory = self._accessory.entity_map.aid(self._aid)
+        this_tv = this_accessory.services.iid(self._iid)
+
+        speaker_service = this_accessory.services.first(
+            service_type=ServicesTypes.SPEAKER,
+            parent_service=this_tv,
+        )
+        return speaker_service
+
+    @property
+    def volume_level(self) -> float | None:
+        """Return the volume level (0..1)."""
+        speaker_service = self._get_speaker_service()
+        if not speaker_service or not speaker_service.has(CharacteristicsTypes.VOLUME):
+            return None
+        
+        # HomeKit volume is 0-100, Home Assistant uses 0.0-1.0
+        volume = speaker_service.value(CharacteristicsTypes.VOLUME)
+        if volume is not None:
+            return volume / 100.0
+        return None
+
+    @property
+    def is_volume_muted(self) -> bool | None:
+        """Return boolean if volume is muted."""
+        speaker_service = self._get_speaker_service()
+        if not speaker_service or not speaker_service.has(CharacteristicsTypes.MUTE):
+            return None
+        
+        return speaker_service.value(CharacteristicsTypes.MUTE)
+
+    async def async_set_volume_level(self, volume: float) -> None:
+        """Set volume level, range 0..1."""
+        speaker_service = self._get_speaker_service()
+        if not speaker_service or not speaker_service.has(CharacteristicsTypes.VOLUME):
+            return
+        
+        # Convert Home Assistant volume (0.0-1.0) to HomeKit volume (0-100)
+        homekit_volume = int(volume * 100)
+        
+        # Build the characteristics update for the speaker service
+        chars_to_update = {CharacteristicsTypes.VOLUME: homekit_volume}
+        payload = speaker_service.build_update(chars_to_update)
+        await self._accessory.put_characteristics(payload)
+
+    async def async_volume_up(self) -> None:
+        """Send volume up command."""
+        speaker_service = self._get_speaker_service()
+        if not speaker_service or not speaker_service.has(
+            CharacteristicsTypes.VOLUME_SELECTOR
+        ):
+            return
+        
+        # Volume selector: 0 = increment, 1 = decrement
+        chars_to_update = {CharacteristicsTypes.VOLUME_SELECTOR: 0}
+        payload = speaker_service.build_update(chars_to_update)
+        await self._accessory.put_characteristics(payload)
+
+    async def async_volume_down(self) -> None:
+        """Send volume down command."""
+        speaker_service = self._get_speaker_service()
+        if not speaker_service or not speaker_service.has(
+            CharacteristicsTypes.VOLUME_SELECTOR
+        ):
+            return
+        
+        # Volume selector: 0 = increment, 1 = decrement
+        chars_to_update = {CharacteristicsTypes.VOLUME_SELECTOR: 1}
+        payload = speaker_service.build_update(chars_to_update)
+        await self._accessory.put_characteristics(payload)
+
+    async def async_mute_volume(self, mute: bool) -> None:
+        """Mute or unmute media player."""
+        speaker_service = self._get_speaker_service()
+        if not speaker_service or not speaker_service.has(CharacteristicsTypes.MUTE):
+            return
+        
+        chars_to_update = {CharacteristicsTypes.MUTE: mute}
+        payload = speaker_service.build_update(chars_to_update)
+        await self._accessory.put_characteristics(payload)
 
     async def async_select_source(self, source: str) -> None:
         """Switch to a different media source."""
